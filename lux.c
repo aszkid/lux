@@ -1,12 +1,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#include <float.h>
 #include "vec3.h"
 #include "ppm.h"
 
 typedef struct {
     vec3 color;
-    double depth;
+    float depth;
 } collision_t;
 
 typedef bool collide(vec3, vec3, void*, collision_t*);
@@ -26,27 +27,25 @@ bool test_ray_sphere(vec3 camera, vec3 ray, void *obj, collision_t *col)
     double b = vec3_dot(m, ray);
     double c = vec3_dot(m, m) - s->r*s->r;
 
+    // Check if interscetion
     if (c > 0.0 && b > 0.0) return false;
 
     float discr = b*b - c;
     if (discr < 0.0) return false;
 
+    // Calculate intersection
     float t = -b - sqrt(discr);
     if (t < 0.0) t = 0.0;
 
-    vec3 q = ray;
-    vec3_mul(q, t, &q);
-    vec3_add(q, camera, &q);
-
-    col->color.x = s->color.x;
-    col->color.y = s->color.y;
-    col->color.z = s->color.z;
+    col->color = (vec3) {
+        s->color.x, s->color.y, s->color.z
+    };
+    col->depth = t;
 
     return true;
 }
 
-
-int render_job(ppm_t *ppm, void* data, collide *test, size_t obj_size, size_t obj_n)
+int render_job(ppm_t *ppm, float *depth, void* data, collide *test, size_t obj_size, size_t obj_n)
 {
     vec3 camera = {0.0, 0.0, -1.0};
     collision_t col;
@@ -69,7 +68,16 @@ int render_job(ppm_t *ppm, void* data, collide *test, size_t obj_size, size_t ob
             // for each object given, test ray
             for (size_t k = 0; k < obj_n; k++) {
                 if (test(camera, ray, data + k * obj_size, &col)) {
-                    ppm_write_at(ppm, i, j, 255.0 * col.color.x, 255.0 * col.color.y, 255.0 * col.color.z);
+                    float *w = &depth[ppm->width * j + i];
+                    if (*w > col.depth) {
+                        *w = col.depth;
+                        ppm_write_at(
+                            ppm, i, j,
+                            255.0 * col.color.x,
+                            255.0 * col.color.y,
+                            255.0 * col.color.z
+                        );
+                    }
                 }
             }
         }
@@ -81,27 +89,36 @@ int render_job(ppm_t *ppm, void* data, collide *test, size_t obj_size, size_t ob
 
 int main(int argc, char **argv)
 {
-    ppm_t *ppm = ppm_create("test.ppm", 1000, 1000);
+    const size_t WIDTH = 1000;
+    const size_t HEIGHT = WIDTH;
 
-    sphere_t spheres[2];
-    // sphere 0
-    spheres[0].r = 0.5;
-    spheres[0].pos.x = -0.5;
-    spheres[0].pos.y = 0.0;
-    spheres[0].pos.z = 1.0;
-    spheres[0].color.x = 1.0;
-    spheres[0].color.y = 0.0;
-    spheres[0].color.z = 0.0;
-    // sphere 1
-    spheres[1].r = 0.5;
-    spheres[1].pos.x = 0.5;
-    spheres[1].pos.y = 0.0;
-    spheres[1].pos.z = 1.0;
-    spheres[1].color.x = 0.0;
-    spheres[1].color.y = 1.0;
-    spheres[1].color.z = 0.0;
+    // open output PPM file
+    ppm_t *ppm = ppm_create("test.ppm", WIDTH, HEIGHT);
 
-    render_job(ppm, spheres, &test_ray_sphere, sizeof(sphere_t), 2);
+    // create depth map
+    float *depth = malloc(sizeof(float) * WIDTH * HEIGHT);
+    for (size_t i = 0; i < HEIGHT * WIDTH; i++)
+        depth[i] = FLT_MAX;
+
+    sphere_t spheres[3];
+    spheres[0] = (sphere_t) {
+        .r = 0.5,
+        .pos = { -0.5, 0.0, 1.0 },
+        .color = { 1.0, 0.0, 0.0 }
+    };
+    spheres[1] = (sphere_t) {
+        .r = 0.5,
+        .pos = { 0.5, 0.0, 1.0 },
+        .color = { 0.0, 1.0, 0.0 }
+    };
+    spheres[2] = (sphere_t) {
+        .r = 0.5,
+        .pos = { 0.0, 0.0, 1.0 },
+        .color = { 0.0, 0.0, 1.0 }
+    };
+
+    render_job(ppm, depth, spheres, &test_ray_sphere, sizeof(sphere_t), 3);
+    free(depth);
     ppm_close(ppm);
 
     return 0;
