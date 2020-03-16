@@ -12,6 +12,34 @@ typedef struct {
 
 typedef bool collide(vec3, vec3, void*, collision_t*);
 
+
+typedef struct {
+    vec3 color;
+    vec3 u, v; // orientation
+    vec3 p; // any point on the plane
+} plane_t;
+
+bool test_ray_plane(vec3 camera, vec3 ray, void *obj, collision_t *col)
+{
+    plane_t *plane = (plane_t*) obj;
+
+    vec3 m;
+    vec3_sub(camera, plane->p, &m);
+    vec3 n;
+    vec3_cross(plane->u, plane->v, &n);
+
+    double nm = vec3_dot(n, m);
+    double nray = vec3_dot(n, ray);
+
+    if (nm * nray < 0.0) {
+        col->depth = - nm / nray;
+        col->color = plane->color;
+        return true;
+    }
+
+    return false;
+}
+
 typedef struct {
     vec3 color;
     double r;
@@ -43,9 +71,7 @@ bool test_ray_sphere(vec3 camera, vec3 ray, void *obj, collision_t *col)
     float t = -b - sqrt(discr);
     if (t < 0.0) t = 0.0;
 
-    col->color = (vec3) {
-        s->color.x, s->color.y, s->color.z
-    };
+    col->color = s->color;
     col->depth = t;
 
     return true;
@@ -106,7 +132,7 @@ int render_job(lux_t *lux, void* data, collide *test, size_t obj_size, size_t ob
 
 int main(int argc, char **argv)
 {
-    const size_t WIDTH = 1000;
+    const size_t WIDTH = 2000;
     const size_t HEIGHT = WIDTH;
 
     lux_t lux = {
@@ -135,7 +161,16 @@ int main(int argc, char **argv)
         .color = { 0.0, 0.0, 1.0 }
     };
 
+    plane_t xz = {
+        .p = { 0.0, -0.25, 0.0 },
+        .u = { 1.0, 0.0, 0.0 },
+        .v = { 0.0, 0.0, 1.0 },
+        .color = { 1.0, 0.4, 0.7 }
+    };
+
+    render_job(&lux, &xz, &test_ray_plane, sizeof(plane_t), 1);
     render_job(&lux, spheres, &test_ray_sphere, sizeof(sphere_t), sizeof(spheres) / sizeof(sphere_t));
+
     free(lux.depth);
     ppm_close(lux.ppm);
 
