@@ -18,6 +18,12 @@ typedef struct {
     vec3 pos;
 } sphere_t;
 
+typedef struct {
+    ppm_t *ppm;
+    float *depth;
+    vec3 camera;
+} lux_t;
+
 bool test_ray_sphere(vec3 camera, vec3 ray, void *obj, collision_t *col)
 {
     sphere_t *s = (sphere_t*) obj;
@@ -45,41 +51,52 @@ bool test_ray_sphere(vec3 camera, vec3 ray, void *obj, collision_t *col)
     return true;
 }
 
-int render_job(ppm_t *ppm, float *depth, void* data, collide *test, size_t obj_size, size_t obj_n)
+/*
+ * [render_objects] render pixel (i, j) given object array, pixel depth, and ray to test on
+ *   lux: lux context
+ *   w: pointer to pixel depth (float)
+ *   i, j: pixel coordinates
+ *   ray: ray to test for
+ *   data: pointer to object data array
+ *   test: object test function function
+ *   obj_size: sizeof object type
+ *   obj_n: number of objects in data array
+ */
+void render_objects(lux_t *lux, float *w, size_t i, size_t j, vec3 ray, void *data, collide *test, size_t obj_size, size_t obj_n)
 {
-    vec3 camera = {0.0, 0.0, -1.0};
     collision_t col;
-    for (size_t j = 0; j < ppm->height; j++) {
-        for (size_t i = 0; i < ppm->width; i++) {
+    for (size_t k = 0; k < obj_n; k++) {
+        if (test(lux->camera, ray, data + k * obj_size, &col) && *w > col.depth) {
+            *w = col.depth;
+            ppm_write_at(
+                lux->ppm, i, j,
+                255.0 * col.color.x,
+                255.0 * col.color.y,
+                255.0 * col.color.z
+            );
+        }
+    }
+}
+
+int render_job(lux_t *lux, void* data, collide *test, size_t obj_size, size_t obj_n)
+{
+    for (size_t j = 0; j < lux->ppm->height; j++) {
+        for (size_t i = 0; i < lux->ppm->width; i++) {
             // project pixel (i, j) to R^3 screen coordinates
-            // TODO we are assuming 1:1 aspect ratio, and
-            //      camera at (0.0, 0.0, -1.0)
+            // TODO we are assuming 1:1 aspect ratio
             vec3 proj = {
-                2.0 * (double) i / (double) ppm->width - 1.0,
-                -2.0 * (double) j / (double) ppm->height + 1.0,
+                2.0 * (double) i / (double) lux->ppm->width - 1.0,
+                -2.0 * (double) j / (double) lux->ppm->height + 1.0,
                 0.0
             };
 
             // compute normalized ray from camera to projected pixel coordinates
             vec3 ray;
-            vec3_sub(proj, camera, &ray);
+            vec3_sub(proj, lux->camera, &ray);
             vec3_normalize(ray, &ray);
 
             // for each object given, test ray
-            for (size_t k = 0; k < obj_n; k++) {
-                if (test(camera, ray, data + k * obj_size, &col)) {
-                    float *w = &depth[ppm->width * j + i];
-                    if (*w > col.depth) {
-                        *w = col.depth;
-                        ppm_write_at(
-                            ppm, i, j,
-                            255.0 * col.color.x,
-                            255.0 * col.color.y,
-                            255.0 * col.color.z
-                        );
-                    }
-                }
-            }
+            render_objects(lux, &lux->depth[lux->ppm->width * j + i], i, j, ray, data, test, obj_size, obj_n);
         }
     }
 
@@ -92,13 +109,14 @@ int main(int argc, char **argv)
     const size_t WIDTH = 1000;
     const size_t HEIGHT = WIDTH;
 
-    // open output PPM file
-    ppm_t *ppm = ppm_create("test.ppm", WIDTH, HEIGHT);
+    lux_t lux = {
+        .ppm = ppm_create("test.ppm", WIDTH, HEIGHT),
+        .depth = malloc(sizeof(float) * WIDTH * HEIGHT),
+        .camera = (vec3) { 0.0, 0.0, -1.0 },
+    };
 
-    // create depth map
-    float *depth = malloc(sizeof(float) * WIDTH * HEIGHT);
     for (size_t i = 0; i < HEIGHT * WIDTH; i++)
-        depth[i] = FLT_MAX;
+        lux.depth[i] = FLT_MAX;
 
     sphere_t spheres[3];
     spheres[0] = (sphere_t) {
@@ -117,9 +135,9 @@ int main(int argc, char **argv)
         .color = { 0.0, 0.0, 1.0 }
     };
 
-    render_job(ppm, depth, spheres, &test_ray_sphere, sizeof(sphere_t), 3);
-    free(depth);
-    ppm_close(ppm);
+    render_job(&lux, spheres, &test_ray_sphere, sizeof(sphere_t), sizeof(spheres) / sizeof(sphere_t));
+    free(lux.depth);
+    ppm_close(lux.ppm);
 
     return 0;
 }
