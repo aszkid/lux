@@ -6,6 +6,61 @@
 #include "ppm.h"
 
 typedef struct {
+    /* up direction (tilt) */
+    vec3 u;
+    /* camera direction (watch) */
+    vec3 v;
+    /* camera position */
+    vec3 p;
+    /* horizontal fov in degrees */
+    double fov;
+} camera_t;
+
+camera_t camera_build(vec3 up, vec3 watch, vec3 pos, double fov)
+{
+    camera_t cam;
+
+    vec3_normalize(up, &cam.u);
+    vec3_normalize(watch, &cam.v);
+    cam.p = pos;
+    cam.fov = fov;
+    
+    return cam;
+}
+
+typedef struct {
+    ppm_t *ppm;
+    float *depth;
+    camera_t camera;
+} lux_t;
+
+vec3 pixel_to_ray(camera_t *camera, double i, double j, double aspect_ratio)
+{
+    double h = 2 * tan(camera->fov * (M_PI / 180.0));
+    double w = aspect_ratio * h;
+
+    // center of plane
+    vec3 center;
+    vec3_add(camera->p, camera->v, &center);
+    vec3 l;
+    vec3_cross(camera->v, camera->u, &l);
+
+    vec3 world = { 0.0, 0.0, 0.0 };
+    vec3_add(world, center, &world);
+    vec3 au;
+    vec3_mul(camera->u, (h / 2) * (1 - 2 * j), &au);
+    vec3 bl;
+    vec3_mul(l, (w / 2) * (1 - 2 * i), &bl);
+    vec3_add(world, au, &world);
+    vec3_add(world, bl, &world);
+    
+    vec3 ray;
+    vec3_sub(world, camera->p, &ray);
+
+    return ray;
+}
+
+typedef struct {
     vec3 color;
     float depth;
 } collision_t;
@@ -45,12 +100,6 @@ typedef struct {
     double r;
     vec3 pos;
 } sphere_t;
-
-typedef struct {
-    ppm_t *ppm;
-    float *depth;
-    vec3 camera;
-} lux_t;
 
 bool test_ray_sphere(vec3 camera, vec3 ray, void *obj, collision_t *col)
 {
@@ -92,7 +141,7 @@ void render_objects(lux_t *lux, float *w, size_t i, size_t j, vec3 ray, void *da
 {
     collision_t col;
     for (size_t k = 0; k < obj_n; k++) {
-        if (test(lux->camera, ray, data + k * obj_size, &col) && *w > col.depth) {
+        if (test(lux->camera.p, ray, data + k * obj_size, &col) && *w > col.depth) {
             *w = col.depth;
             ppm_write_at(
                 lux->ppm, i, j,
@@ -110,15 +159,23 @@ int render_job(lux_t *lux, void* data, collide *test, size_t obj_size, size_t ob
         for (size_t i = 0; i < lux->ppm->width; i++) {
             // project pixel (i, j) to R^3 screen coordinates
             // TODO we are assuming 1:1 aspect ratio
-            vec3 proj = {
+            /*vec3 proj = {
                 2.0 * (double) i / (double) lux->ppm->width - 1.0,
                 -2.0 * (double) j / (double) lux->ppm->height + 1.0,
                 0.0
             };
-
-            // compute normalized ray from camera to projected pixel coordinates
             vec3 ray;
             vec3_sub(proj, lux->camera, &ray);
+            vec3_normalize(ray, &ray);
+            */
+
+            vec3 ray = pixel_to_ray(
+                &lux->camera,
+                (double) i / (double) lux->ppm->width,
+                (double) j / (double) lux->ppm->height, 
+                ((double) lux->ppm->width) / lux->ppm->height
+            );
+            //printf("pixel (%zu, %zu) gives ray (%f, %f, %f)\n", i, j, VEC3_UNPACK(ray));
             vec3_normalize(ray, &ray);
 
             // for each object given, test ray
@@ -132,13 +189,18 @@ int render_job(lux_t *lux, void* data, collide *test, size_t obj_size, size_t ob
 
 int main(int argc, char **argv)
 {
-    const size_t WIDTH = 2000;
+    const size_t WIDTH = 1000;
     const size_t HEIGHT = WIDTH;
 
     lux_t lux = {
         .ppm = ppm_create("test.ppm", WIDTH, HEIGHT),
         .depth = malloc(sizeof(float) * WIDTH * HEIGHT),
-        .camera = (vec3) { 0.0, 0.0, -1.0 },
+        .camera = camera_build(
+            (vec3) { 0.0, 1.0, 0.0 },   // up
+            (vec3) { -1.0, 0.0, 1.0 },   // watch
+            (vec3) { 1.0, 0.0, -1.0 },  // position
+            65.0                        // fov
+        ),
     };
 
     for (size_t i = 0; i < HEIGHT * WIDTH; i++)
