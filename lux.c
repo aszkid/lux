@@ -2,6 +2,8 @@
 #include <stdlib.h>
 #include <math.h>
 #include <float.h>
+#include <time.h>
+#include <errno.h>
 #include "vec3.h"
 #include "ppm.h"
 
@@ -186,40 +188,36 @@ int render_job(lux_t *lux, void* data, collide *test, size_t obj_size, size_t ob
     return 0;
 }
 
-
 int main(int argc, char **argv)
 {
-    const size_t WIDTH = 1000;
+    const size_t WIDTH = 500;
     const size_t HEIGHT = WIDTH;
 
     lux_t lux = {
-        .ppm = ppm_create("test.ppm", WIDTH, HEIGHT),
+        .ppm = NULL,
         .depth = malloc(sizeof(float) * WIDTH * HEIGHT),
         .camera = camera_build(
             (vec3) { 0.0, 1.0, 0.0 },   // up
-            (vec3) { -1.0, 0.0, 1.0 },   // watch
-            (vec3) { 1.0, 0.0, -1.0 },  // position
-            65.0                        // fov
+            (vec3) { 0.0, 0.0, 1.0 },   // watch
+            (vec3) { 0.0, 0.0, -3.0 },  // position
+            45.0                        // fov
         ),
     };
 
-    for (size_t i = 0; i < HEIGHT * WIDTH; i++)
-        lux.depth[i] = FLT_MAX;
-
     sphere_t spheres[3];
     spheres[0] = (sphere_t) {
-        .r = 0.5,
-        .pos = { -0.5, 0.0, 1.0 },
+        .r = 0.25,
+        .pos = { -0.5, 0.0, 0.0 },
         .color = { 1.0, 0.0, 0.0 }
     };
     spheres[1] = (sphere_t) {
-        .r = 0.5,
-        .pos = { 0.5, 0.0, 1.0 },
+        .r = 0.25,
+        .pos = { 0.5, 0.0, 0.0 },
         .color = { 0.0, 1.0, 0.0 }
     };
     spheres[2] = (sphere_t) {
-        .r = 0.5,
-        .pos = { 0.0, 0.0, 1.0 },
+        .r = 0.25,
+        .pos = { 0.0, 0.0, 0.0 },
         .color = { 0.0, 0.0, 1.0 }
     };
 
@@ -230,11 +228,39 @@ int main(int argc, char **argv)
         .color = { 1.0, 0.4, 0.7 }
     };
 
-    render_job(&lux, &xz, &test_ray_plane, sizeof(plane_t), 1);
-    render_job(&lux, spheres, &test_ray_sphere, sizeof(sphere_t), sizeof(spheres) / sizeof(sphere_t));
+    int i = 0;
+    double frames = 100.0;
+    double delta = M_PI / frames;
+    vec3 origin = { 0.0, 0.0, 0.0 };
+    for (double theta = 0; theta <= M_PI; theta += delta) {
+        char buf[32];
+        sprintf(buf, "out/run_%03d.ppm", i++);
+        lux.ppm = ppm_create(buf, WIDTH, HEIGHT);
+        lux.camera.p = origin;
+        lux.camera.p.x = 2.0 * cos(3.0 / 2.0 * M_PI + 2 * theta);
+        lux.camera.p.y = 1.0 * sin(theta);
+        lux.camera.p.z = 2.0 * sin(3.0 / 2.0 * M_PI + 2.0 * theta);
+        lux.camera.v = origin;
+        vec3_sub(lux.camera.v, lux.camera.p, &lux.camera.v);
+        vec3_normalize(lux.camera.v, &lux.camera.v);
+
+        lux.camera.u = (vec3) { 0.0, 1.0, 0.0 };
+        if (lux.camera.v.y != 0) {
+            vec3_mul(lux.camera.u, - vec3_dot(lux.camera.v, lux.camera.v) / lux.camera.v.y, &lux.camera.u);
+            vec3_add(lux.camera.u, lux.camera.v, &lux.camera.u);
+            vec3_normalize(lux.camera.u, &lux.camera.u);
+        }
+        printf("up vec: (%f, %f, %f)\n", VEC3_UNPACK(lux.camera.u));
+
+        for (size_t i = 0; i < HEIGHT * WIDTH; i++)
+            lux.depth[i] = FLT_MAX;
+
+        render_job(&lux, &xz, &test_ray_plane, sizeof(plane_t), 1);
+        render_job(&lux, spheres, &test_ray_sphere, sizeof(sphere_t), sizeof(spheres) / sizeof(sphere_t));
+        ppm_close(lux.ppm);
+    }
 
     free(lux.depth);
-    ppm_close(lux.ppm);
 
     return 0;
 }
