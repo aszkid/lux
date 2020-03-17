@@ -2,33 +2,9 @@
 #include <stdlib.h>
 #include <math.h>
 #include <float.h>
-#include <time.h>
-#include <errno.h>
 #include "vec3.h"
+#include "camera.h"
 #include "ppm.h"
-
-typedef struct {
-    /* up direction (tilt) */
-    vec3 u;
-    /* camera direction (watch) */
-    vec3 v;
-    /* camera position */
-    vec3 p;
-    /* horizontal fov in degrees */
-    double fov;
-} camera_t;
-
-camera_t camera_build(vec3 up, vec3 watch, vec3 pos, double fov)
-{
-    camera_t cam;
-
-    vec3_normalize(up, &cam.u);
-    vec3_normalize(watch, &cam.v);
-    cam.p = pos;
-    cam.fov = fov;
-    
-    return cam;
-}
 
 typedef struct {
     ppm_t *ppm;
@@ -36,39 +12,12 @@ typedef struct {
     camera_t camera;
 } lux_t;
 
-vec3 pixel_to_ray(camera_t *camera, double i, double j, double aspect_ratio)
-{
-    double h = 2 * tan(camera->fov * (M_PI / 180.0));
-    double w = aspect_ratio * h;
-
-    // center of plane
-    vec3 center;
-    vec3_add(camera->p, camera->v, &center);
-    vec3 l;
-    vec3_cross(camera->v, camera->u, &l);
-
-    vec3 world = { 0.0, 0.0, 0.0 };
-    vec3_add(world, center, &world);
-    vec3 au;
-    vec3_mul(camera->u, (h / 2) * (1 - 2 * j), &au);
-    vec3 bl;
-    vec3_mul(l, (w / 2) * (1 - 2 * i), &bl);
-    vec3_add(world, au, &world);
-    vec3_add(world, bl, &world);
-    
-    vec3 ray;
-    vec3_sub(world, camera->p, &ray);
-
-    return ray;
-}
-
 typedef struct {
     vec3 color;
     float depth;
 } collision_t;
 
 typedef bool collide(vec3, vec3, void*, collision_t*);
-
 
 typedef struct {
     vec3 color;
@@ -155,30 +104,17 @@ void render_objects(lux_t *lux, float *w, size_t i, size_t j, vec3 ray, void *da
     }
 }
 
-int render_job(lux_t *lux, void* data, collide *test, size_t obj_size, size_t obj_n)
+int lux_render_job(lux_t *lux, void* data, collide *test, size_t obj_size, size_t obj_n)
 {
     for (size_t j = 0; j < lux->ppm->height; j++) {
         for (size_t i = 0; i < lux->ppm->width; i++) {
-            // project pixel (i, j) to R^3 screen coordinates
-            // TODO we are assuming 1:1 aspect ratio
-            /*vec3 proj = {
-                2.0 * (double) i / (double) lux->ppm->width - 1.0,
-                -2.0 * (double) j / (double) lux->ppm->height + 1.0,
-                0.0
-            };
-            vec3 ray;
-            vec3_sub(proj, lux->camera, &ray);
-            vec3_normalize(ray, &ray);
-            */
-
-            vec3 ray = pixel_to_ray(
+            // compute ray corresponding to pixel (i, j)
+            vec3 ray = camera_pixel_to_ray(
                 &lux->camera,
                 (double) i / (double) lux->ppm->width,
                 (double) j / (double) lux->ppm->height, 
                 ((double) lux->ppm->width) / lux->ppm->height
             );
-            //printf("pixel (%zu, %zu) gives ray (%f, %f, %f)\n", i, j, VEC3_UNPACK(ray));
-            vec3_normalize(ray, &ray);
 
             // for each object given, test ray
             render_objects(lux, &lux->depth[lux->ppm->width * j + i], i, j, ray, data, test, obj_size, obj_n);
@@ -190,19 +126,22 @@ int render_job(lux_t *lux, void* data, collide *test, size_t obj_size, size_t ob
 
 int main(int argc, char **argv)
 {
-    const size_t WIDTH = 500;
+    const size_t WIDTH = 1000;
     const size_t HEIGHT = WIDTH;
 
     lux_t lux = {
-        .ppm = NULL,
+        .ppm = ppm_create("out.ppm", WIDTH, HEIGHT),
         .depth = malloc(sizeof(float) * WIDTH * HEIGHT),
-        .camera = camera_build(
-            (vec3) { 0.0, 1.0, 0.0 },   // up
-            (vec3) { 0.0, 0.0, 1.0 },   // watch
-            (vec3) { 0.0, 0.0, -3.0 },  // position
-            45.0                        // fov
-        ),
+        .camera = {
+            .p = (vec3) { 0.0, 0.0, -3.0 },
+            .fov = 35.0
+        }
     };
+
+    camera_look_at((vec3) { 0.0, 0.0, 0.0 }, &lux.camera);
+
+    for (size_t i = 0; i < HEIGHT * WIDTH; i++)
+        lux.depth[i] = FLT_MAX;
 
     sphere_t spheres[3];
     spheres[0] = (sphere_t) {
@@ -228,38 +167,10 @@ int main(int argc, char **argv)
         .color = { 1.0, 0.4, 0.7 }
     };
 
-    int i = 0;
-    double frames = 100.0;
-    double delta = M_PI / frames;
-    vec3 origin = { 0.0, 0.0, 0.0 };
-    for (double theta = 0; theta <= M_PI; theta += delta) {
-        char buf[32];
-        sprintf(buf, "out/run_%03d.ppm", i++);
-        lux.ppm = ppm_create(buf, WIDTH, HEIGHT);
-        lux.camera.p = origin;
-        lux.camera.p.x = 2.0 * cos(3.0 / 2.0 * M_PI + 2 * theta);
-        lux.camera.p.y = 1.0 * sin(theta);
-        lux.camera.p.z = 2.0 * sin(3.0 / 2.0 * M_PI + 2.0 * theta);
-        lux.camera.v = origin;
-        vec3_sub(lux.camera.v, lux.camera.p, &lux.camera.v);
-        vec3_normalize(lux.camera.v, &lux.camera.v);
+    lux_render_job(&lux, &xz, &test_ray_plane, sizeof(plane_t), 1);
+    lux_render_job(&lux, spheres, &test_ray_sphere, sizeof(sphere_t), sizeof(spheres) / sizeof(sphere_t));
 
-        lux.camera.u = (vec3) { 0.0, 1.0, 0.0 };
-        if (lux.camera.v.y != 0) {
-            vec3_mul(lux.camera.u, - vec3_dot(lux.camera.v, lux.camera.v) / lux.camera.v.y, &lux.camera.u);
-            vec3_add(lux.camera.u, lux.camera.v, &lux.camera.u);
-            vec3_normalize(lux.camera.u, &lux.camera.u);
-        }
-        printf("up vec: (%f, %f, %f)\n", VEC3_UNPACK(lux.camera.u));
-
-        for (size_t i = 0; i < HEIGHT * WIDTH; i++)
-            lux.depth[i] = FLT_MAX;
-
-        render_job(&lux, &xz, &test_ray_plane, sizeof(plane_t), 1);
-        render_job(&lux, spheres, &test_ray_sphere, sizeof(sphere_t), sizeof(spheres) / sizeof(sphere_t));
-        ppm_close(lux.ppm);
-    }
-
+    ppm_close(lux.ppm);
     free(lux.depth);
 
     return 0;
