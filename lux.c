@@ -175,15 +175,15 @@ void lux_submit_job(lux_t *lux, job_t *job)
 
 int main(int argc, char **argv)
 {
-    const size_t WIDTH = 2000;
+    const size_t WIDTH = 3000;
     const size_t HEIGHT = WIDTH;
 
     lux_t lux = {
         .ppm = ppm_create("out.ppm", WIDTH, HEIGHT),
         .depth = malloc(sizeof(float) * WIDTH * HEIGHT),
         .camera = {
-            .p = (vec3) { 5.0, 1.0, -3.0 },
-            .fov = 15.0
+            .p = (vec3) { 1.0, 1.0, -1.0 },
+            .fov = 30.0
         },
         .light = { 5.0, 5.0, 0.0 },
         .jobs = NULL,
