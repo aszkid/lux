@@ -5,12 +5,7 @@
 #include "vec3.h"
 #include "camera.h"
 #include "ppm.h"
-
-typedef struct {
-    ppm_t *ppm;
-    float *depth;
-    camera_t camera;
-} lux_t;
+#include "utlist.h"
 
 typedef struct {
     vec3 color;
@@ -18,6 +13,26 @@ typedef struct {
 } collision_t;
 
 typedef bool collide(vec3, vec3, void*, collision_t*);
+
+typedef struct job {
+    uint8_t *data;
+    size_t obj_size;
+    size_t obj_num;
+    collide *test;
+    struct job *next;
+} job_t;
+
+typedef struct {
+    ppm_t *ppm;
+    float *depth;
+    camera_t camera;
+    vec3 light;
+    job_t *jobs;
+} lux_t;
+
+////////////////////////////////////
+// GEOMETRY
+////////////////////////////////////
 
 typedef struct {
     vec3 color;
@@ -88,23 +103,49 @@ bool test_ray_sphere(vec3 camera, vec3 ray, void *obj, collision_t *col)
  *   obj_size: sizeof object type
  *   obj_n: number of objects in data array
  */
-void render_objects(lux_t *lux, float *w, size_t i, size_t j, vec3 ray, void *data, collide *test, size_t obj_size, size_t obj_n)
+void render_objects(lux_t *lux, float *w, size_t i, size_t j, vec3 ray, job_t *job)
 {
     collision_t col;
-    for (size_t k = 0; k < obj_n; k++) {
-        if (test(lux->camera.p, ray, data + k * obj_size, &col) && *w > col.depth) {
+    for (size_t k = 0; k < job->obj_num; k++) {
+        // test if ray hits object
+        if (job->test(lux->camera.p, ray, job->data + k * job->obj_size, &col) && *w > col.depth) {
+            // ray hits object in this position
+            vec3 source;
+            vec3_mul(ray, col.depth, &source);
+            vec3_add(source, lux->camera.p, &source);
             *w = col.depth;
-            ppm_write_at(
-                lux->ppm, i, j,
-                255.0 * col.color.x,
-                255.0 * col.color.y,
-                255.0 * col.color.z
-            );
+
+            // check if light source hits this
+            vec3 light_ray = lux->light;
+            vec3_sub(light_ray, source, &light_ray);
+            vec3_normalize(light_ray, &light_ray);
+
+            // nudge a bit
+            vec3 lil = light_ray;
+            vec3_mul(lil, 0.001, &lil);
+            vec3_add(source, lil, &source);
+
+            double r, g, b;
+            r = 255.0 * col.color.x;
+            g = 255.0 * col.color.y;
+            b = 255.0 * col.color.z;
+
+            // check if some object obstructs the direct path towards our light source
+            job_t *job2;
+            LL_FOREACH(lux->jobs, job2) {
+                for (size_t s = 0; s < job2->obj_num; s++) {
+                    if (job2->test(source, light_ray, job2->data + s * job2->obj_size, &col)) {
+                        r *= 0.2; g *= 0.2; b *= 0.2;
+                        break;
+                    }
+                }
+            }
+            ppm_write_at(lux->ppm, i, j, r, g, b);
         }
     }
 }
 
-int lux_render_job(lux_t *lux, void* data, collide *test, size_t obj_size, size_t obj_n)
+int lux_render(lux_t *lux)
 {
     for (size_t j = 0; j < lux->ppm->height; j++) {
         for (size_t i = 0; i < lux->ppm->width; i++) {
@@ -116,26 +157,36 @@ int lux_render_job(lux_t *lux, void* data, collide *test, size_t obj_size, size_
                 ((double) lux->ppm->width) / lux->ppm->height
             );
 
-            // for each object given, test ray
-            render_objects(lux, &lux->depth[lux->ppm->width * j + i], i, j, ray, data, test, obj_size, obj_n);
+            // render all jobs on this ray
+            job_t *job;
+            LL_FOREACH(lux->jobs, job) {
+                render_objects(lux, &lux->depth[lux->ppm->width * j + i], i, j, ray, job);
+            }
         }
     }
 
     return 0;
 }
 
+void lux_submit_job(lux_t *lux, job_t *job)
+{
+    LL_APPEND(lux->jobs, job);
+}
+
 int main(int argc, char **argv)
 {
-    const size_t WIDTH = 1000;
+    const size_t WIDTH = 2000;
     const size_t HEIGHT = WIDTH;
 
     lux_t lux = {
         .ppm = ppm_create("out.ppm", WIDTH, HEIGHT),
         .depth = malloc(sizeof(float) * WIDTH * HEIGHT),
         .camera = {
-            .p = (vec3) { 0.0, 0.0, -3.0 },
-            .fov = 35.0
-        }
+            .p = (vec3) { 5.0, 1.0, -3.0 },
+            .fov = 15.0
+        },
+        .light = { 5.0, 5.0, 0.0 },
+        .jobs = NULL,
     };
 
     camera_look_at((vec3) { 0.0, 0.0, 0.0 }, &lux.camera);
@@ -146,12 +197,12 @@ int main(int argc, char **argv)
     sphere_t spheres[3];
     spheres[0] = (sphere_t) {
         .r = 0.25,
-        .pos = { -0.5, 0.0, 0.0 },
+        .pos = { -0.5, 0.2, 0.0 },
         .color = { 1.0, 0.0, 0.0 }
     };
     spheres[1] = (sphere_t) {
         .r = 0.25,
-        .pos = { 0.5, 0.0, 0.0 },
+        .pos = { 0.5, 0.1, 0.0 },
         .color = { 0.0, 1.0, 0.0 }
     };
     spheres[2] = (sphere_t) {
@@ -167,9 +218,28 @@ int main(int argc, char **argv)
         .color = { 1.0, 0.4, 0.7 }
     };
 
-    lux_render_job(&lux, &xz, &test_ray_plane, sizeof(plane_t), 1);
-    lux_render_job(&lux, spheres, &test_ray_sphere, sizeof(sphere_t), sizeof(spheres) / sizeof(sphere_t));
+    job_t *job;
+    
+    job = malloc(sizeof(job_t));
+    job->data = (uint8_t*) &xz;
+    job->test = &test_ray_plane;
+    job->obj_size = sizeof(plane_t);
+    job->obj_num = 1;
+    lux_submit_job(&lux, job);
 
+    job = malloc(sizeof(job_t));
+    job->data = (uint8_t*) spheres;
+    job->test = &test_ray_sphere;
+    job->obj_size = sizeof(sphere_t);
+    job->obj_num = 3;
+    lux_submit_job(&lux, job);
+    
+    lux_render(&lux);
+
+    job_t *tmp;
+    LL_FOREACH_SAFE(lux.jobs, job, tmp) {
+        free(job);
+    }
     ppm_close(lux.ppm);
     free(lux.depth);
 
