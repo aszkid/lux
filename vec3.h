@@ -14,6 +14,7 @@ void vec3_mul(vec3 a, double s, vec3 *res);
 void vec3_cross(vec3 a, vec3 b, vec3 *res);
 double vec3_dot(vec3 a, vec3 b);
 bool vec3_eq(vec3 a, vec3 b);
+double vec3_norm(vec3 a);
 void vec3_normalize(vec3 a, vec3 *res);
 
 #define VEC3_UNPACK(v) v.x, v.y, v.z

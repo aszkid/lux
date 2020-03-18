@@ -63,6 +63,41 @@ bool test_ray_plane(vec3 camera, vec3 ray, void *obj, collision_t *col)
 
 typedef struct {
     vec3 color;
+    vec3 u, v;
+    vec3 p;
+    double width;
+} wall_t;
+
+bool test_ray_wall(vec3 camera, vec3 ray, void *obj, collision_t *col)
+{
+    wall_t *wall = (wall_t*) obj;
+
+    vec3 m;
+    vec3_sub(camera, wall->p, &m);
+    vec3 n;
+    vec3_cross(wall->u, wall->v, &n);
+
+    double nm = vec3_dot(n, m);
+    double nray = vec3_dot(n, ray);
+
+    if (nm * nray < 0.0) {
+        col->depth = - nm / nray;
+        col->color = wall->color;
+
+        vec3 pt = ray;
+        vec3_mul(pt, col->depth, &pt);
+        vec3_add(pt, camera, &pt);
+        vec3_sub(pt, wall->p, &pt);
+
+        if (fabs(vec3_dot(pt, wall->u)) < wall->width && fabs(vec3_dot(pt, wall->v)) < wall->width)
+            return true;
+    }
+
+    return false;
+}
+
+typedef struct {
+    vec3 color;
     double r;
     vec3 pos;
 } sphere_t;
@@ -136,7 +171,6 @@ void render_objects(lux_t *lux, float *w, size_t i, size_t j, vec3 ray, job_t *j
                 for (size_t s = 0; s < job2->obj_num; s++) {
                     if (job2->test(source, light_ray, job2->data + s * job2->obj_size, &col)) {
                         r *= 0.2; g *= 0.2; b *= 0.2;
-                        break;
                     }
                 }
             }
@@ -175,7 +209,7 @@ void lux_submit_job(lux_t *lux, job_t *job)
 
 int main(int argc, char **argv)
 {
-    const size_t WIDTH = 3000;
+    const size_t WIDTH = 1000;
     const size_t HEIGHT = WIDTH;
 
     lux_t lux = {
@@ -218,6 +252,14 @@ int main(int argc, char **argv)
         .color = { 1.0, 0.4, 0.7 }
     };
 
+    wall_t yz = {
+        .p = { 0.0, 0.5, 0.0 },
+        .u = { 0.0, 0.0, 1.0 },
+        .v = { 0.0, 1.0, 0.0 },
+        .color = { 0.0, 1.0, 1.0 },
+        .width = 0.25,
+    };
+
     job_t *job;
     
     job = malloc(sizeof(job_t));
@@ -233,6 +275,13 @@ int main(int argc, char **argv)
     job->obj_size = sizeof(sphere_t);
     job->obj_num = 3;
     lux_submit_job(&lux, job);
+
+    job = malloc(sizeof(job_t));
+    job->data = (uint8_t*) &yz;
+    job->test = &test_ray_wall;
+    job->obj_size = sizeof(wall_t);
+    job->obj_num = 1;
+    //lux_submit_job(&lux, job);
     
     lux_render(&lux);
 

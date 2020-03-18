@@ -48,9 +48,14 @@ bool vec3_eq(vec3 a, vec3 b)
     return WITHIN(a.x, b.x) && WITHIN(a.y, b.y) && WITHIN(a.z, b.z);
 }
 
+double vec3_norm(vec3 a)
+{
+    return sqrt(a.x*a.x + a.y*a.y + a.z*a.z);
+}
+
 void vec3_normalize(vec3 a, vec3 *res)
 {
-    double norm = sqrt(a.x*a.x + a.y*a.y + a.z*a.z);
+    double norm = vec3_norm(a);
     res->x = a.x / norm;
     res->y = a.y / norm;
     res->z = a.z / norm;
